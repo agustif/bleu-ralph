@@ -221,10 +221,16 @@ export async function runLoop(
       const sendMessage = async (message: string) => {
         log("loop", "Sending user message to session", { sessionId, message });
         try {
-          await client.session.message({
+          // Send message using session.prompt API with the current model
+          await client.session.prompt({
             path: { id: sessionId },
-            body: { parts: [{ type: "text", text: message }] },
+            body: {
+              parts: [{ type: "text", text: message }],
+              model: { providerID, modelID },
+            },
           });
+          
+          // Add event to show the user message was sent
           callbacks.onEvent({
             iteration,
             type: "user-message",
@@ -239,9 +245,21 @@ export async function runLoop(
       };
 
       // Notify TUI that session is ready for steering messages
+      log("loop", "About to call onSessionCreated callback", { 
+        hasCallback: !!callbacks.onSessionCreated,
+        sessionId 
+      });
+      
       if (callbacks.onSessionCreated) {
-        log("loop", "Calling onSessionCreated callback", { sessionId });
-        callbacks.onSessionCreated(sessionId, sendMessage);
+        try {
+          log("loop", "Calling onSessionCreated callback", { sessionId });
+          callbacks.onSessionCreated(sessionId, sendMessage);
+          log("loop", "Successfully called onSessionCreated callback");
+        } catch (e) {
+          log("loop", "Error calling onSessionCreated callback", { error: String(e) });
+        }
+      } else {
+        log("loop", "No onSessionCreated callback provided");
       }
 
       // Subscribe to events - the SSE connection is established when we start iterating

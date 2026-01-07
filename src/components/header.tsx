@@ -88,7 +88,7 @@ export function Header(props: HeaderProps) {
             <span style={{ fg: colors.green }}>{filledBar()}</span>
             <span style={{ fg: colors.fgMuted }}>{emptyBar()}</span>
             <span style={{ fg: colors.fgMuted }}>]</span>
-            <span style={{ fg: colors.purple }}>{props.showTasks ? " \u25BC" : " \u25BE"}</span>
+            <span style={{ fg: colors.cyan }}>{props.showTasks ? " \u25BC" : " \u25BE"}</span>
           </text>
         </box>
 
@@ -108,12 +108,12 @@ export function Header(props: HeaderProps) {
           width={60}
           height={20}
           backgroundColor={colors.bgDark}
-          borderColor={colors.purple}
+          borderColor={colors.cyan}
           borderStyle="single"
           padding={1}
         >
           <box width="100%" flexDirection="row" marginBottom={1}>
-            <text fg={colors.purple}>Tasks</text>
+            <text fg={colors.cyan}>Tasks</text>
             <text flexGrow={1} />
             <text fg={colors.fgMuted}>{props.tasks.length} items</text>
           </box>

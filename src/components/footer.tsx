@@ -33,8 +33,8 @@ export function Footer(props: FooterProps) {
       <text fg={colors.fgMuted}>
         (<span style={{ fg: colors.fg }}>q</span>) quit  (
         <span style={{ fg: colors.fg }}>p</span>) {props.paused ? "resume" : "pause"}
-        {" "}<span style={{ fg: props.commandMode ? colors.purple : colors.fg }}>:(</span>){" "}
-        <span style={{ fg: props.showTasks ? colors.purple : colors.fg }}>t</span>
+        {" "}<span style={{ fg: props.commandMode ? colors.cyan : colors.fg }}>:(</span>){" "}
+        <span style={{ fg: props.showTasks ? colors.cyan : colors.fg }}>t</span>
       </text>
 
       {/* Spacer */}

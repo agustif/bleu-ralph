@@ -26,7 +26,7 @@ export function TasksPanel(props: TasksPanelProps) {
     >
       <box
         backgroundColor={colors.bgDark}
-        borderColor={colors.purple}
+        borderColor={colors.cyan}
         borderStyle="single"
         padding={1}
         paddingLeft={2}
@@ -44,7 +44,7 @@ export function TasksPanel(props: TasksPanelProps) {
           borderColor={colors.border}
           borderStyle="single"
         >
-          <text fg={colors.purple}>Plan Tasks</text>
+          <text fg={colors.cyan}>Plan Tasks</text>
           <text flexGrow={1} />
           <text fg={colors.fgMuted}>{props.tasks.length} tasks</text>
         </box>
