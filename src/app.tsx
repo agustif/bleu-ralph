@@ -352,9 +352,13 @@ export function App(props: AppProps) {
     const keyDisplay = e.raw || key;
 
     // Debug: log key press for troubleshooting
-    if (key !== "escape") {
-      log("app", "Key pressed", { name: key, raw: e.raw, ctrl: e.ctrl, meta: e.meta });
-    }
+    log("app", "Key pressed", { 
+      name: key, 
+      raw: e.raw, 
+      ctrl: e.ctrl, 
+      meta: e.meta,
+      isCommandMode: commandMode()
+    });
 
     // : key: enter command mode for steering messages
     // Check both name and raw sequence for colon character
@@ -411,11 +415,12 @@ export function App(props: AppProps) {
     }
 
     // Don't process other keys when in command mode
-    // EXCEPT for ESC (handled above) and Enter (handled above)
-    // This allows the input component to receive all other keyboard events
+    // EXCEPT for ESC (handled above) - let input components handle their own events
     if (commandMode()) {
-      log("app", "In command mode, blocking key for input component", { key });
-      return;
+      // Only block ESC (already handled above) and other navigation keys
+      // Let input components handle Enter and other input-specific keys
+      log("app", "In command mode, allowing input component to handle key", { key });
+      // Don't return here - let the input component handle the key
     }
 
     // Dismiss error overlay on any key press
@@ -524,15 +529,16 @@ export function App(props: AppProps) {
               value={commandInput()}
               placeholder="Type message and press Enter"
               onInput={(e: any) => {
-                log("app", "Input changed", { 
+                log("app", "Input", { 
+                  onInputCalledEvent: e, 
                   value: e.value, 
                   currentInput: commandInput(),
-                  eventTarget: e.target 
+                  target: e.target 
                 });
                 setCommandInput(e.value);
               }}
               onSubmit={(e: any) => {
-                log("app", "Input submitted", { 
+                log("app", "Input onSubmit called", { 
                   event: e, 
                   currentInput: commandInput(),
                   target: e.target 
@@ -541,7 +547,7 @@ export function App(props: AppProps) {
               }}
               focusedBackgroundColor={colors.bgHighlight}
               focusedTextColor={colors.fg}
-              cursorColor={colors.purple}
+              cursorColor={colors.cyan}
             />
             <box height={1} />
             <text style={{ fg: colors.fgMuted }}>
