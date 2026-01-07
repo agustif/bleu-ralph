@@ -476,10 +476,18 @@ Remove debugging code and document findings.
   - Added "Windows-Specific Considerations" section with keepalive, requestRender, TTY checks, and terminal title reset
   - All findings from Phases 1-7 are now documented for future reference
 
-- [ ] **8.3** Update README if needed:
-  - Installation instructions
-  - Known issues
-  - Terminal compatibility
+ - [x] **8.3** Update README if needed:
+   - Installation instructions
+   - Known issues
+   - Terminal compatibility
+
+   **Completed (2026-01-07):**
+   - Added "Known Issues" section documenting:
+     - `onMount` lifecycle hook not firing reliably in `@opentui/solid`
+     - Fallback stdin handler activates after 5 seconds as workaround
+     - Keyboard handling works across Windows Terminal, PowerShell, and CMD
+     - Kitty keyboard protocol enabled but not fully supported by all terminals
+   - README now accurately reflects current implementation limitations
 
 - [x] **8.4** Clean up commented code:
   - Remove backup code blocks

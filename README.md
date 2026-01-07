@@ -160,6 +160,12 @@ tests/
 └── helpers/      # Mock factories, temp file utils
 ```
 
+## Known Issues
+
+**Keyboard handling**: The `onMount` lifecycle hook in `@opentui/solid` does not fire reliably on some systems. This means the primary keyboard handler may not initialize. A fallback stdin handler activates after 5 seconds if no keyboard events are received, ensuring `q` (quit) and `p` (pause) keys still work.
+
+**Terminal compatibility**: Keyboard handling works across Windows Terminal, PowerShell, and CMD. The Kitty keyboard protocol is enabled but not all terminals support it fully. Fallback stdin handling provides coverage regardless.
+
 ## Requirements
 
 - [Bun](https://bun.sh) v1.0+
