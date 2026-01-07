@@ -5,7 +5,7 @@ import { acquireLock, releaseLock } from "./lock";
 import { loadState, saveState, PersistedState, LoopOptions, trimEventsInPlace, LoopState, ToolEvent } from "./state";
 import { confirm } from "./prompt";
 import { getHeadHash, getDiffStats, getCommitsSince } from "./git";
-import { startApp } from "./app";
+import { startApp, type AppStateSetters } from "./app";
 import { runLoop } from "./loop";
 import { initLog, log } from "./util/log";
 import { readFileSync, existsSync } from "fs";
@@ -18,6 +18,10 @@ interface RalphConfig {
   prompt?: string;
 }
 
+/**
+ * Load global Ralph configuration from config directory.
+ * Checks OpenCode configuration if Ralph config doesn't exist.
+ */
 function loadGlobalConfig(): RalphConfig {
   const configPath = join(homedir(), ".config", "ralph", "config.json");
   if (existsSync(configPath)) {
@@ -28,6 +32,45 @@ function loadGlobalConfig(): RalphConfig {
       // Silently ignore invalid config
     }
   }
+
+  // Try to load OpenCode's default model configuration
+  const opencodeConfigPaths = [
+    join(homedir(), ".opencode", "config.json"),
+    join(homedir(), ".config", "opencode", "config.json"),
+  ];
+
+  for (const configPath of opencodeConfigPaths) {
+    if (existsSync(configPath)) {
+      try {
+        const content = readFileSync(configPath, "utf-8");
+        const opencodeConfig = JSON.parse(content);
+        
+        // Extract default model from OpenCode config
+        if (opencodeConfig.defaultModel) {
+          return {
+            model: opencodeConfig.defaultModel,
+          };
+        }
+        
+        // Fallback: check for Anthropic model configuration
+        if (opencodeConfig.models?.anthropic?.default) {
+          return {
+            model: `anthropic/${opencodeConfig.models.anthropic.default}`,
+          };
+        }
+        
+        // Fallback: check for any available models
+        if (opencodeConfig.models?.anthropic?.claudeOpus4) {
+          return {
+            model: "anthropic/claude-opus-4",
+          };
+        }
+      } catch {
+        // Silently ignore invalid OpenCode config
+      }
+    }
+  }
+
   return {};
 }
 
@@ -347,156 +390,197 @@ async function main() {
     });
 
 // Start the TUI app and get state setters
-    log("main", "Starting TUI app");
-    const { exitPromise, stateSetters } = await startApp({
+    log("main", "Starting TUI app", { stateToUseExists: !!stateToUse });
+    let stateSetters: AppStateSetters;
+    const { exitPromise } = await startApp({
       options: loopOptions,
-      persistedState: stateToUse,
+      persistedState: stateToUse!,
       onQuit: () => {
         log("main", "onQuit callback triggered");
         abortController.abort();
       },
       onKeyboardEvent, // Task 4.3: Callback to detect if OpenTUI keyboard is working
-    });
-    log("main", "TUI app started, state setters available");
-
-    // Create batched updater for coalescing rapid state changes
-    // Use 100ms debounce for better batching during high event throughput
-    const batchedUpdater = createBatchStateUpdater(stateSetters.setState, 100);
-
-    // Fetch initial diff stats and commits on resume
-    const initialDiff = await getDiffStats(stateToUse.initialCommitHash);
-    const initialCommits = await getCommitsSince(stateToUse.initialCommitHash);
-    stateSetters.setState((prev) => ({
-      ...prev,
-      linesAdded: initialDiff.added,
-      linesRemoved: initialDiff.removed,
-      commits: initialCommits,
-    }));
-    log("main", "Initial stats loaded", { diff: initialDiff, commits: initialCommits });
-
-    // Start the loop in parallel with callbacks wired to app state
-    log("main", "Starting loop");
-    runLoop(loopOptions, stateToUse, {
-      onIterationStart: (iteration) => {
-        log("main", "onIterationStart", { iteration });
-        stateSetters.setState((prev) => ({
-          ...prev,
-          status: "running",
-          iteration,
-        }));
+      onStateSettersReady: (setters) => {
+        log("main", "State setters ready callback received");
+        stateSetters = setters;
+        // Now that TUI is ready, start the loop
+        startLoopWithSetters();
       },
-      onEvent: (event) => {
-        // Debounce event updates to batch rapid events within 50ms window
-        // Mutate existing array in-place to avoid allocations
-        batchedUpdater.queueUpdate((prev) => {
-          // For tool events, ensure spinner stays at the end of the array
-          if (event.type === "tool") {
-            // Find and remove spinner temporarily
-            const spinnerIndex = prev.events.findIndex((e) => e.type === "spinner");
-            let spinner: typeof event | undefined;
+    });
+    log("main", "TUI app started");
+
+    // Separate function to start loop once stateSetters are available
+    function startLoopWithSetters() {
+      if (!stateToUse) {
+        log("main", "ERROR: stateToUse is null, cannot start loop");
+        return;
+      }
+      
+      log("main", "Starting loop with ready state setters");
+      
+      // Create batched updater for coalescing rapid state changes
+      // Use 100ms debounce for better batching during high event throughput
+      const batchedUpdater = createBatchStateUpdater(stateSetters.setState, 100);
+
+      // Fetch initial diff stats and commits on resume
+      getDiffStats(stateToUse.initialCommitHash).then((initialDiff) => {
+        return getCommitsSince(stateToUse.initialCommitHash).then((initialCommits) => {
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            linesAdded: initialDiff.added,
+            linesRemoved: initialDiff.removed,
+            commits: initialCommits,
+          }));
+          log("main", "Initial stats loaded", { diff: initialDiff, commits: initialCommits });
+        });
+      });
+
+      // Start the loop in parallel with callbacks wired to app state
+      log("main", "Starting loop");
+      runLoop(loopOptions, stateToUse, {
+        onIterationStart: (iteration) => {
+          log("main", "onIterationStart", { iteration });
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            status: "running",
+            iteration,
+          }));
+        },
+        onEvent: (event) => {
+          // Debounce event updates to batch rapid events within 50ms window
+          // Mutate existing array in-place to avoid allocations
+          batchedUpdater.queueUpdate((prev: LoopState) => {
+            // For tool events, ensure spinner stays at the end of the array
+            if (event.type === "tool") {
+              // Find and remove spinner temporarily
+              const spinnerIndex = prev.events.findIndex((e) => e.type === "spinner");
+              let spinner: typeof event | undefined;
+              if (spinnerIndex !== -1) {
+                spinner = prev.events.splice(spinnerIndex, 1)[0];
+              }
+              // Add the tool event
+              prev.events.push(event);
+              // Re-add spinner at the end
+              if (spinner) {
+                prev.events.push(spinner);
+              }
+            } else {
+              prev.events.push(event);
+            }
+            trimEventsInPlace(prev.events);
+            return { events: prev.events };
+          });
+        },
+        onIterationComplete: (iteration, duration, commits) => {
+          // Mutate the separator event in-place and remove spinner
+          stateSetters.setState((prev: LoopState) => {
+            for (const event of prev.events) {
+              if (event.type === "separator" && event.iteration === iteration) {
+                event.duration = duration;
+                event.commitCount = commits;
+                break;
+              }
+            }
+            // Remove spinner event for this iteration
+            const spinnerIndex = prev.events.findIndex(
+              (e) => e.type === "spinner" && e.iteration === iteration
+            );
             if (spinnerIndex !== -1) {
-              spinner = prev.events.splice(spinnerIndex, 1)[0];
+              prev.events.splice(spinnerIndex, 1);
             }
-            // Add the tool event
-            prev.events.push(event);
-            // Re-add spinner at the end
-            if (spinner) {
-              prev.events.push(spinner);
-            }
-          } else {
-            prev.events.push(event);
-          }
-          trimEventsInPlace(prev.events);
-          return { events: prev.events };
-        });
-      },
-      onIterationComplete: (iteration, duration, commits) => {
-        // Mutate the separator event in-place and remove spinner
-        stateSetters.setState((prev) => {
-          for (const event of prev.events) {
-            if (event.type === "separator" && event.iteration === iteration) {
-              event.duration = duration;
-              event.commitCount = commits;
-              break;
-            }
-          }
-          // Remove spinner event for this iteration
-          const spinnerIndex = prev.events.findIndex(
-            (e) => e.type === "spinner" && e.iteration === iteration
-          );
-          if (spinnerIndex !== -1) {
-            prev.events.splice(spinnerIndex, 1);
-          }
-          // Return same events array reference - mutation is sufficient to trigger re-render
-          return { ...prev };
-        });
-        // Update persisted state with the new iteration time
-        stateToUse.iterationTimes.push(duration);
-        saveState(stateToUse);
-        // Update the iteration times in the app for ETA calculation
-        stateSetters.updateIterationTimes([...stateToUse.iterationTimes]);
-      },
-      onTasksUpdated: (done, total) => {
-        log("main", "onTasksUpdated", { done, total });
-        stateSetters.setState((prev) => ({
-          ...prev,
-          tasksComplete: done,
-          totalTasks: total,
-        }));
-      },
-      onCommitsUpdated: (commits) => {
-        // Debounce commits updates - these can lag slightly for better batching
-        batchedUpdater.queueUpdate(() => ({
-          commits,
-        }));
-      },
-      onDiffUpdated: (added, removed) => {
-        // Debounce diff updates - these can lag slightly for better batching
-        batchedUpdater.queueUpdate(() => ({
-          linesAdded: added,
-          linesRemoved: removed,
-        }));
-      },
-      onPause: () => {
-        // Update state.status to "paused"
-        stateSetters.setState((prev) => ({
-          ...prev,
-          status: "paused",
-        }));
-      },
-      onResume: () => {
-        // Update state.status to "running"
-        stateSetters.setState((prev) => ({
-          ...prev,
-          status: "running",
-        }));
-      },
-      onComplete: () => {
-        // Update state.status to "complete"
-        stateSetters.setState((prev) => ({
-          ...prev,
-          status: "complete",
-        }));
-      },
-      onError: (error) => {
-        // Update state.status to "error" and set state.error
-        stateSetters.setState((prev) => ({
-          ...prev,
-          status: "error",
-          error,
-        }));
-      },
-      onIdleChanged: (isIdle) => {
-        // Update isIdle state for idle mode optimization
-        stateSetters.setState((prev) => ({
-          ...prev,
-          isIdle,
-        }));
-      },
-    }, abortController.signal).catch((error) => {
-      log("main", "Loop error", { error: error instanceof Error ? error.message : String(error) });
-      console.error("Loop error:", error);
-    });
+            // Return same events array reference - mutation is sufficient to trigger re-render
+            return { ...prev };
+          });
+          // Update persisted state with the new iteration time
+          stateToUse.iterationTimes.push(duration);
+          saveState(stateToUse);
+          // Update the iteration times in the app for ETA calculation
+          stateSetters.updateIterationTimes([...stateToUse.iterationTimes]);
+        },
+        onTasksUpdated: (done, total) => {
+          log("main", "onTasksUpdated", { done, total });
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            tasksComplete: done,
+            totalTasks: total,
+          }));
+        },
+        onCommitsUpdated: (commits) => {
+          // Debounce commits updates - these can lag slightly for better batching
+          batchedUpdater.queueUpdate(() => ({
+            commits,
+          }));
+        },
+        onDiffUpdated: (added, removed) => {
+          // Debounce diff updates - these can lag slightly for better batching
+          batchedUpdater.queueUpdate(() => ({
+            linesAdded: added,
+            linesRemoved: removed,
+          }));
+        },
+        onPause: () => {
+          // Update state.status to "paused"
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            status: "paused",
+          }));
+        },
+        onResume: () => {
+          // Update state.status to "running"
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            status: "running",
+          }));
+        },
+        onComplete: () => {
+          // Update state.status to "complete"
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            status: "complete",
+          }));
+        },
+        onError: (error) => {
+          // Update state.status to "error" and set state.error
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            status: "error",
+            error,
+          }));
+          
+          // Log error for debugging
+          log("main", "Error occurred", { error });
+          
+          // Also show in console for visibility
+          console.error("Ralph error:", error);
+        },
+        onIdleChanged: (isIdle) => {
+          // Update isIdle state for idle mode optimization
+          stateSetters.setState((prev: LoopState) => ({
+            ...prev,
+            isIdle,
+          }));
+        },
+        onSessionCreated: (sessionId, sendMessage) => {
+          log("main", "Session created", { sessionId });
+          stateSetters.onSessionCreated(sessionId, sendMessage);
+        },
+        onSessionEnded: () => {
+          log("main", "Session ended");
+          stateSetters.onSessionEnded();
+        },
+        onSessionsList: (sessions) => {
+          log("main", "Sessions list updated", { count: sessions.length });
+          stateSetters.onSessionsList(sessions);
+        },
+        onSwitchSession: (sessionId) => {
+          log("main", "Switching session", { sessionId });
+          stateSetters.onSwitchSession(sessionId);
+        },
+      }, abortController.signal).catch((error) => {
+        log("main", "Loop error", { error: error instanceof Error ? error.message : String(error) });
+        console.error("Loop error:", error);
+      });
+    }
 
     // Wait for the app to exit, then cleanup
     log("main", "Waiting for exit");

@@ -261,14 +261,26 @@ describe("edge cases", () => {
 
       const options: LoopOptions = createBaseOptions();
       const persistedState = createPersistedState();
+      let iterationCount = 0;
       const callbacks = createTestCallbacks();
+      const originalOnIterationComplete = callbacks.onIterationComplete;
+
+      // Hook into onIterationComplete to create .ralph-done after iteration
+      callbacks.onIterationComplete = async (iteration, duration, commits) => {
+        originalOnIterationComplete(iteration, duration, commits);
+
+        if (iteration === 1) {
+          await writeFile(".ralph-done", "");
+          cleanupFiles.push(".ralph-done");
+        }
+      };
+
       const controller = new AbortController();
 
-      // Create .ralph-done to stop after first iteration (even with prompt error)
-      cleanupFiles.push(".ralph-done");
-      setTimeout(async () => {
-        await writeFile(".ralph-done", "");
-      }, 50);
+      // Ensure .ralph-done doesn't exist before starting
+      try {
+        await unlink(".ralph-done");
+      } catch {}
 
       // Should not throw - prompt error is caught and logged
       await runLoop(options, persistedState, callbacks, controller.signal);

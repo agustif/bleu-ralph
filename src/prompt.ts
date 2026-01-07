@@ -1,6 +1,7 @@
 /**
  * Pre-TUI confirmation prompts using raw mode for single character input.
  */
+import { log } from "./util/log";
 
 /**
  * Prompt user for y/n confirmation.
@@ -25,7 +26,7 @@ export async function confirm(message: string): Promise<boolean> {
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(false);
       }
-      process.stdin.pause();
+      // Don't pause stdin - leave it running for the TUI
       process.stdin.removeListener("data", onData);
 
       // Print the character and newline for feedback

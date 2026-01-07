@@ -90,6 +90,68 @@ useKeyboard((e: KeyEvent) => {
 
 4. **Terminal title reset**: Call `renderer.setTerminalTitle("")` before `renderer.destroy()` to reset the window title on exit.
 
+## E2E Testing with TUI-Test
+
+For proper TUI E2E testing, use **Microsoft's tui-test** framework: https://github.com/microsoft/tui-test
+
+TUI-Test provides:
+- Terminal isolation with PTY (pseudo-terminal) support
+- Multi-platform testing (macOS, Linux, Windows)
+- Multi-shell support (bash, zsh, fish, powershell, cmd)
+- Rich assertions for terminal content
+- Screenshot and snapshot testing
+- No-flaky test guarantees with auto-wait
+
+**Installation** (when using Node.js for E2E tests):
+
+```bash
+npm install -D @microsoft/tui-test
+```
+
+**Example test** (test/e2e/tui.test.ts):
+
+```typescript
+import { test, expect } from "@microsoft/tui-test";
+
+test.use({
+  program: {
+    file: "bun",
+    args: ["run", "src/index.ts"],
+  },
+});
+
+test("TUI starts and shows header", async ({ terminal }) => {
+  await expect(terminal.getByText(/ralph/i)).toBeVisible();
+  await expect(terminal.getByText(/iteration/i)).toBeVisible();
+
+  // Test keyboard interactions
+  terminal.write("t"); // Toggle tasks panel
+  await expect(terminal.getByText(/task/i)).toBeVisible();
+
+  terminal.write("q"); // Quit
+});
+```
+
+**Configuration** (tui-test.config.ts):
+
+```typescript
+import { defineConfig } from "@microsoft/tui-test";
+
+export default defineConfig({
+  retries: 2,
+  trace: true,  // Capture traces for debugging
+  timeout: 30000,
+});
+```
+
+**Running tests**:
+
+```bash
+npx @microsoft/tui-test
+```
+
+**Note**: TUI-test uses native node-pty bindings which may have compatibility issues with Bun. For E2E testing, consider using Node.js 18+ instead of Bun.
+
 ## NPM Publishing
 
 To release a new version to npm, run:

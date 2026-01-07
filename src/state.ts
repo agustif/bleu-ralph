@@ -20,7 +20,7 @@ export type LoopState = {
 
 export type ToolEvent = {
   iteration: number;
-  type: "tool" | "separator" | "spinner";
+  type: "tool" | "separator" | "spinner" | "user-message";
   icon?: string;
   text: string;
   timestamp: number;
@@ -70,3 +70,5 @@ export type LoopOptions = {
   model: string;
   prompt: string;
 };
+
+export type SendMessageCallback = (message: string) => void;

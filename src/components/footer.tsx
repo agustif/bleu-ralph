@@ -7,6 +7,8 @@ export type FooterProps = {
   paused: boolean;
   linesAdded: number;
   linesRemoved: number;
+  commandMode?: boolean;
+  showTasks?: boolean;
 };
 
 /**
@@ -29,7 +31,10 @@ export function Footer(props: FooterProps) {
     >
       {/* Keybind hints (left side) */}
       <text fg={colors.fgMuted}>
-        (<span style={{ fg: colors.fg }}>q</span>) interrupt  (<span style={{ fg: colors.fg }}>p</span>) {props.paused ? "resume" : "pause"}
+        (<span style={{ fg: colors.fg }}>q</span>) quit  (
+        <span style={{ fg: colors.fg }}>p</span>) {props.paused ? "resume" : "pause"}
+        {" "}<span style={{ fg: props.commandMode ? colors.purple : colors.fg }}>:(</span>){" "}
+        <span style={{ fg: props.showTasks ? colors.purple : colors.fg }}>t</span>
       </text>
 
       {/* Spacer */}

@@ -136,7 +136,7 @@ function SeparatorEvent(props: { event: ToolEvent }) {
  * Renders a tool event line.
  * Format: {icon} {text}
  * Icon color is based on tool type (blue for read, green for write/edit, etc.)
- * 
+ *
  * Memoized to prevent re-computation of icon and color on every reactive update.
  */
 function ToolEventItem(props: { event: ToolEvent }) {
@@ -146,6 +146,20 @@ function ToolEventItem(props: { event: ToolEvent }) {
   return (
     <box width="100%" flexDirection="row">
       <text fg={iconColor()}>{icon()}</text>
+      <text fg={colors.fg}> {props.event.text}</text>
+    </box>
+  );
+}
+
+/**
+ * Renders a user message line.
+ * Format: → {text}
+ * Uses purple color to distinguish from tool events.
+ */
+function UserMessageItem(props: { event: ToolEvent }) {
+  return (
+    <box width="100%" flexDirection="row">
+      <text fg={colors.purple}>{props.event.icon}</text>
       <text fg={colors.fg}> {props.event.text}</text>
     </box>
   );
@@ -189,6 +203,9 @@ export function Log(props: LogProps) {
             </Match>
             <Match when={event.type === "tool"}>
               <ToolEventItem event={event} />
+            </Match>
+            <Match when={event.type === "user-message"}>
+              <UserMessageItem event={event} />
             </Match>
           </Switch>
         )}

@@ -171,7 +171,7 @@ describe("ralph flow integration", () => {
     await cleanupRalphFiles();
   });
 
-  it("should call callbacks in correct order during iteration", async () => {
+   it("should call callbacks in correct order during iteration", async () => {
     const options: LoopOptions = {
       planFile: testPlanFile,
       model: "anthropic/claude-sonnet-4",
@@ -185,18 +185,30 @@ describe("ralph flow integration", () => {
       planFile: testPlanFile,
     };
 
-    const callbacks = createTestCallbacks();
+    // Create modified callbacks that create .ralph-done after first iteration
+    let iterationCount = 0;
+    const modifiedCallbacks = createTestCallbacks();
+    const originalOnIterationComplete = modifiedCallbacks.onIterationComplete;
+
+    modifiedCallbacks.onIterationComplete = async (iteration, duration, commits) => {
+      // Call original to update callbackOrder
+      originalOnIterationComplete(iteration, duration, commits);
+
+      // After first iteration completes, create .ralph-done to stop the loop
+      if (iteration === 1) {
+        await Bun.write(".ralph-done", "");
+        cleanupFiles.push(".ralph-done");
+      }
+    };
+
     const controller = new AbortController();
 
-    // Create .ralph-done file to stop after first iteration
-    cleanupFiles.push(".ralph-done");
-    
-    // Schedule creation of .ralph-done after a short delay to allow one iteration
-    setTimeout(async () => {
-      await Bun.write(".ralph-done", "");
-    }, 50);
+    // Ensure .ralph-done does not exist before starting
+    try {
+      await unlink(".ralph-done");
+    } catch {}
 
-    await runLoop(options, persistedState, callbacks, controller.signal);
+    await runLoop(options, persistedState, modifiedCallbacks, controller.signal);
 
     // Verify callback order
     // 1. onIterationStart
@@ -412,7 +424,7 @@ describe("ralph flow integration", () => {
     expect(doneFileExists).toBe(false);
   });
 
-  it("should call onPause and onResume when .ralph-pause file is created and removed", async () => {
+   it("should call onPause and onResume when .ralph-pause file is created and removed", async () => {
     const options: LoopOptions = {
       planFile: testPlanFile,
       model: "anthropic/claude-sonnet-4",
@@ -426,30 +438,43 @@ describe("ralph flow integration", () => {
       planFile: testPlanFile,
     };
 
-    const callbacks = createTestCallbacks();
+    let iterationCompleteCount = 0;
+    const modifiedCallbacks = createTestCallbacks();
+    const originalOnIterationComplete = modifiedCallbacks.onIterationComplete;
+
+    // Hook into onIterationComplete to trigger resume after first iteration
+    modifiedCallbacks.onIterationComplete = async (iteration, duration, commits) => {
+      originalOnIterationComplete(iteration, duration, commits);
+
+      iterationCompleteCount++;
+
+      // After first iteration completes, create pause file
+      if (iterationCompleteCount === 1) {
+        await Bun.write(".ralph-pause", "");
+        cleanupFiles.push(".ralph-pause");
+
+        // Then remove it to trigger resume
+        setTimeout(async () => {
+          await unlink(".ralph-pause").catch(() => {});
+
+          // Finally create .ralph-done to stop the loop
+          setTimeout(async () => {
+            await Bun.write(".ralph-done", "");
+            cleanupFiles.push(".ralph-done");
+          }, 2000);
+        }, 500);
+      }
+    };
+
     const controller = new AbortController();
 
-    cleanupFiles.push(".ralph-pause");
-    cleanupFiles.push(".ralph-done");
+    // Ensure no .ralph-done or .ralph-pause exists before starting
+    try {
+      await unlink(".ralph-done");
+      await unlink(".ralph-pause");
+    } catch {}
 
-    // Create .ralph-pause file before starting the loop
-    await Bun.write(".ralph-pause", "");
-
-    // Schedule removal of .ralph-pause after the first pause check cycle (loop sleeps 1000ms when paused)
-    setTimeout(async () => {
-      await unlink(".ralph-pause").catch(() => {});
-    }, 500);
-
-    // Schedule creation of .ralph-done after resume to stop the loop
-    // Need to wait for:
-    // - Initial pause detection + 1000ms sleep
-    // - Resume detection (pause file removed at 500ms, checked after sleep)
-    // - Then we can complete
-    setTimeout(async () => {
-      await Bun.write(".ralph-done", "");
-    }, 1200);
-
-    await runLoop(options, persistedState, callbacks, controller.signal);
+    await runLoop(options, persistedState, modifiedCallbacks, controller.signal);
 
     // Verify onPause was called
     expect(callbackOrder).toContain("onPause");
@@ -465,7 +490,7 @@ describe("ralph flow integration", () => {
     expect(callbackOrder).toContain("onComplete");
   });
 
-  it("should exit cleanly when abort signal is triggered mid-iteration", async () => {
+   it("should exit cleanly when abort signal is triggered mid-iteration", async () => {
     const options: LoopOptions = {
       planFile: testPlanFile,
       model: "anthropic/claude-sonnet-4",
@@ -482,7 +507,12 @@ describe("ralph flow integration", () => {
     const callbacks = createTestCallbacks();
     const controller = new AbortController();
 
-    // Schedule abort after the iteration starts but before it can complete multiple iterations
+    // Ensure .ralph-done doesn't exist before starting
+    try {
+      await unlink(".ralph-done");
+    } catch {}
+
+    // Schedule abort after iteration starts but before it can complete multiple iterations
     // This gives time for the loop to start and begin processing
     setTimeout(() => {
       controller.abort();
@@ -491,7 +521,7 @@ describe("ralph flow integration", () => {
     // runLoop should exit without throwing when aborted
     await runLoop(options, persistedState, callbacks, controller.signal);
 
-    // Verify the loop exited cleanly (no error callbacks)
+    // Verify loop exited cleanly (no error callbacks)
     const errorEvents = callbackOrder.filter((c) => c.startsWith("onError:"));
     expect(errorEvents).toHaveLength(0);
 

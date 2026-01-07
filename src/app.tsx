@@ -1,21 +1,98 @@
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
 import type { KeyEvent } from "@opentui/core";
-import { createSignal, onCleanup, Setter } from "solid-js";
+import { createSignal, onCleanup, Setter, Show, For, createMemo } from "solid-js";
 import { Header } from "./components/header";
 import { Log } from "./components/log";
 import { Footer } from "./components/footer";
 import { PausedOverlay } from "./components/paused";
+import { TasksPanel } from "./components/tasks";
 import type { LoopState, LoopOptions, PersistedState } from "./state";
 import { colors } from "./components/colors";
 import { calculateEta } from "./util/time";
 import { log } from "./util/log";
+import { parsePlan, type Task } from "./plan";
+
+/**
+ * Error overlay component for displaying errors
+ */
+function ErrorOverlay(props: { error: string; onDismiss: () => void }) {
+  return (
+    <box
+      position="absolute"
+      top={0}
+      left={0}
+      right={0}
+      bottom={0}
+      backgroundColor="rgba(0, 0, 0, 0.95)"
+      flexDirection="column"
+      justifyContent="center"
+      alignItems="center"
+    >
+      <box
+        backgroundColor={colors.bgDark}
+        borderColor={colors.red}
+        borderStyle="single"
+        padding={2}
+        paddingLeft={3}
+        paddingRight={3}
+        flexDirection="column"
+        width={80}
+        height={15}
+      >
+        <box
+          width="100%"
+          flexDirection="row"
+          marginBottom={1}
+          paddingBottom={1}
+          border={["bottom"]}
+          borderColor={colors.red}
+          borderStyle="single"
+        >
+          <text style={{ fg: colors.red }}>⚠ Error</text>
+          <text flexGrow={1} />
+          <text style={{ fg: colors.fgMuted }}>Press any key to dismiss</text>
+        </box>
+
+        <box
+          flexGrow={1}
+          flexDirection="column"
+          justifyContent="center"
+        >
+          <text style={{ fg: colors.fg }}>
+            {props.error}
+          </text>
+        </box>
+
+        <box
+          width="100%"
+          flexDirection="row"
+          marginTop={1}
+          paddingTop={1}
+          border={["top"]}
+          borderColor={colors.red}
+          borderStyle="single"
+        >
+          <text style={{ fg: colors.fgMuted }}>
+            Ralph encountered an error and will retry automatically
+          </text>
+        </box>
+      </box>
+    </box>
+  );
+}
 
 type AppProps = {
   options: LoopOptions;
   persistedState: PersistedState;
   onQuit: () => void;
   iterationTimesRef?: number[];
-  onKeyboardEvent?: () => void; // Called when first keyboard event is received
+  onKeyboardEvent?: () => void;
+  onSessionCreated?: (sessionId: string, sendMessage: (message: string) => Promise<void>) => void;
+  onSessionEnded?: () => void;
+  onSessionsList?: (sessions: Array<{ id: string; created: string }>) => void;
+  onSwitchSession?: (sessionId: string) => void;
+  setSendMessageRef?: (setter: (fn: ((msg: string) => Promise<void>) | null) => void) => void;
+  onStateSettersReady?: (setters: AppStateSetters) => void;
 };
 
 /**
@@ -24,6 +101,10 @@ type AppProps = {
 export type AppStateSetters = {
   setState: Setter<LoopState>;
   updateIterationTimes: (times: number[]) => void;
+  onSessionCreated: (sessionId: string, sendMessage: (message: string) => Promise<void>) => void;
+  onSessionEnded: () => void;
+  onSessionsList: (sessions: Array<{ id: string; created: string }>) => void;
+  onSwitchSession: (sessionId: string) => void;
 };
 
 /**
@@ -37,92 +118,53 @@ export type StartAppResult = {
 // Module-level state setters that will be populated when App renders
 let globalSetState: Setter<LoopState> | null = null;
 let globalUpdateIterationTimes: ((times: number[]) => void) | null = null;
+let globalOnSessionCreated: ((sessionId: string, sendMessage: (message: string) => Promise<void>) => void) | null = null;
+let globalOnSessionEnded: (() => void) | null = null;
+let globalOnSessionsList: ((sessions: Array<{ id: string; created: string }>) => void) | null = null;
+let globalOnSwitchSession: ((sessionId: string) => void) | null = null;
 
-
-
-/**
- * Main App component with state signals.
- * Manages LoopState and elapsed time, rendering the full TUI layout.
- */
-/**
- * Props for starting the app, including optional keyboard detection callback.
- */
-export type StartAppProps = {
-  options: LoopOptions;
-  persistedState: PersistedState;
-  onQuit: () => void;
-  onKeyboardEvent?: () => void; // Called once when first keyboard event is received
-};
-
-/**
- * Starts the TUI application and returns a promise that resolves when the app exits,
- * along with state setters for external updates.
- *
- * @param props - The application props including options, persisted state, and quit handler
- * @returns Promise<StartAppResult> with exitPromise and stateSetters
- */
-export async function startApp(props: StartAppProps): Promise<StartAppResult> {
-  // Create a mutable reference to iteration times that can be updated externally
-  let iterationTimesRef = [...props.persistedState.iterationTimes];
-  
-  // Create exit promise with resolver
-  let exitResolve!: () => void;
-  const exitPromise = new Promise<void>((resolve) => {
-    exitResolve = resolve;
-  });
-  
-  const onQuit = () => {
-    log("app", "onQuit callback invoked");
-    props.onQuit();
-    exitResolve();
-  };
-
-  // Await render to ensure CLI renderer is fully initialized
-  await render(
-    () => (
-      <App
-        options={props.options}
-        persistedState={props.persistedState}
-        onQuit={onQuit}
-        iterationTimesRef={iterationTimesRef}
-        onKeyboardEvent={props.onKeyboardEvent}
-      />
-    ),
-    {
-      targetFps: 30, // Balanced FPS: OpenCode uses 60, but 30 is sufficient for ralph's logging TUI
-      gatherStats: false, // Disable stats gathering for performance (matches OpenCode)
-      exitOnCtrlC: false,
-      useKittyKeyboard: {}, // Enable Kitty keyboard protocol for improved key event handling
-    }
-  );
-
-  // State setters are set during App component body execution, so they're
-  // available immediately after render() completes.
-  if (!globalSetState || !globalUpdateIterationTimes) {
-    throw new Error(
-      "State setters not initialized after render. This indicates the App component did not execute."
-    );
-  }
-
-  const stateSetters: AppStateSetters = {
-    setState: globalSetState,
-    updateIterationTimes: (times) => {
-      iterationTimesRef.length = 0;
-      iterationTimesRef.push(...times);
-      globalUpdateIterationTimes!(times);
-    },
-  };
-
-  return { exitPromise, stateSetters };
-}
+export type SendMessageSetter = Setter<((message: string) => Promise<void>) | null>;
 
 export function App(props: AppProps) {
+  log("app", "App component starting");
+  
   // Get renderer for cleanup on quit
   const renderer = useRenderer();
+  log("app", "Renderer obtained");
+
+  // Signal for sendMessage function (for sending steering messages)
+  const [sendMessage, setSendMessage] = createSignal<((message: string) => Promise<void>) | null>(null);
+
+  // Signal for command mode state
+  const [commandMode, setCommandMode] = createSignal(false);
+  const [commandInput, setCommandInput] = createSignal("");
+
+  // Signal for tasks panel
+  const [showTasks, setShowTasks] = createSignal(false);
+  const [tasks, setTasks] = createSignal<Task[]>([]);
+
+  // Signal for sessions list
+  const [sessions, setSessions] = createSignal<Array<{ id: string; created: string }>>([]);
+
+  // Signal for error display
+  const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [showError, setShowError] = createSignal(false);
+
+  // Expose setter to parent
+  if (props.setSendMessageRef) {
+    props.setSendMessageRef(setSendMessage);
+  }
+
+  // Load tasks from plan file
+  parsePlan(props.options.planFile).then((data) => {
+    log("app", "Tasks loaded", { count: data.tasks.length, done: data.done, total: data.total });
+    setTasks(data.tasks);
+  });
   
   // Disable stdout interception to prevent OpenTUI from capturing stdout
   // which may interfere with logging and other output (matches OpenCode pattern).
   renderer.disableStdoutInterception();
+  log("app", "Stdout interception disabled");
   
   // State signal for loop state
   // Initialize iteration to length + 1 since we're about to start the next iteration
@@ -137,6 +179,7 @@ export function App(props: AppProps) {
     events: [],
     isIdle: true, // Starts idle, waiting for first LLM response
   });
+  log("app", "State signal created");
 
   // Signal to track iteration times (for ETA calculation)
   const [iterationTimes, setIterationTimes] = createSignal<number[]>(
@@ -146,11 +189,44 @@ export function App(props: AppProps) {
   // Export wrapped state setter for external access. Calls requestRender()
   // after updates to ensure TUI refreshes on all platforms.
   globalSetState = (update) => {
+    log("app", "globalSetState called");
     const result = setState(update);
     renderer.requestRender?.();
     return result;
   };
   globalUpdateIterationTimes = (times: number[]) => setIterationTimes(times);
+  globalOnSessionCreated = (sessionId: string, sendMessage: (message: string) => Promise<void>) => {
+    log("app", "Session created", { sessionId });
+    setSendMessage(() => sendMessage);
+  };
+  globalOnSessionEnded = () => {
+    log("app", "Session ended");
+    setSendMessage(() => null);
+  };
+  globalOnSessionsList = (sessionsList: Array<{ id: string; created: string }>) => {
+    log("app", "Sessions list callback", { count: sessionsList.length });
+    setSessions(sessionsList);
+  };
+  globalOnSwitchSession = (sessionId: string) => {
+    log("app", "Switching session", { sessionId });
+    (globalThis as any).ralphSwitchSession?.(sessionId);
+  };
+  
+  log("app", "Global state setters initialized");
+  
+  // Notify parent that state setters are ready
+  if (props.onStateSettersReady) {
+    const stateSetters: AppStateSetters = {
+      setState: globalSetState!,
+      updateIterationTimes: globalUpdateIterationTimes!,
+      onSessionCreated: globalOnSessionCreated!,
+      onSessionEnded: globalOnSessionEnded!,
+      onSessionsList: globalOnSessionsList!,
+      onSwitchSession: globalOnSwitchSession!,
+    };
+    log("app", "Calling onStateSettersReady callback");
+    props.onStateSettersReady(stateSetters);
+  }
 
   // Track elapsed time from the persisted start time
   const [elapsed, setElapsed] = createSignal(
@@ -167,11 +243,18 @@ export function App(props: AppProps) {
   }, 5000);
 
   onCleanup(() => {
+    log("app", "App component cleanup");
     clearInterval(elapsedInterval);
     // Clean up module-level references
     globalSetState = null;
     globalUpdateIterationTimes = null;
+    globalOnSessionCreated = null;
+    globalOnSessionEnded = null;
+    globalOnSessionsList = null;
+    globalOnSwitchSession = null;
   });
+
+  log("app", "App component initialization complete, rendering JSX");
 
   // Calculate ETA based on iteration times and remaining tasks
   const eta = () => {
@@ -189,7 +272,7 @@ export function App(props: AppProps) {
     const exists = await file.exists();
     if (exists) {
       // Resume: delete pause file and update status
-      await Bun.write(PAUSE_FILE, ""); // Ensure file exists before unlinking
+      await Bun.write(PAUSE_FILE, "");
       const fs = await import("node:fs/promises");
       await fs.unlink(PAUSE_FILE);
       setState((prev) => ({ ...prev, status: "running" }));
@@ -200,19 +283,120 @@ export function App(props: AppProps) {
     }
   };
 
+  // Send steering message
+  const sendSteeringMessage = async () => {
+    const message = commandInput().trim();
+    if (!message) {
+      setCommandMode(false);
+      setCommandInput("");
+      return;
+    }
+    const sender = sendMessage();
+    if (sender) {
+      try {
+        await sender(message);
+        log("app", "Sent steering message", { message });
+      } catch (e) {
+        log("app", "Failed to send steering message", { error: String(e) });
+      }
+    } else {
+      log("app", "No active session to send message");
+    }
+    setCommandMode(false);
+    setCommandInput("");
+  };
+
   // Track if we've notified about keyboard events working (only notify once)
   let keyboardEventNotified = false;
 
   // Keyboard handling
   useKeyboard((e: KeyEvent) => {
+    log("app", "useKeyboard callback called", { key: e.name, ctrl: e.ctrl, meta: e.meta, raw: e.raw });
+    
     // Notify caller that OpenTUI keyboard handling is working
     // This allows the caller to skip setting up a fallback stdin handler
     if (!keyboardEventNotified && props.onKeyboardEvent) {
       keyboardEventNotified = true;
       props.onKeyboardEvent();
     }
-    
+
     const key = e.name.toLowerCase();
+    const keyDisplay = e.raw || key;
+
+    // Debug: log key press for troubleshooting
+    if (key !== "escape") {
+      log("app", "Key pressed", { name: key, raw: e.raw, ctrl: e.ctrl, meta: e.meta });
+    }
+
+    // : key: enter command mode for steering messages
+    // Check both name and raw sequence for colon character
+    const isColon = key === "colon" || e.raw === ":" || (key === "semicolon" && e.shift);
+    if (isColon && !e.ctrl && !e.meta) {
+      log("app", "Entering command mode via colon key");
+      setCommandMode(true);
+      setCommandInput(""); // Clear any previous input
+      return;
+    }
+
+    // s key: switch sessions (cycle through available sessions)
+    if (key === "s" && !e.ctrl && !e.meta && !commandMode()) {
+      const sessionsList = sessions();
+      if (sessionsList.length > 0) {
+        const currentIndex = sessionsList.findIndex((s) => s.id === (globalThis as any).ralphCurrentSessionId?.());
+        const nextIndex = (currentIndex + 1) % sessionsList.length;
+        const nextSession = sessionsList[nextIndex];
+        log("app", "Switching session", { currentIndex, nextIndex, nextId: nextSession.id });
+        globalOnSwitchSession?.(nextSession.id);
+      } else {
+        log("app", "No sessions to switch");
+      }
+      return;
+    }
+
+    // t key: toggle tasks panel (works even in command mode to close it)
+    if (key === "t" && !e.ctrl && !e.meta) {
+      log("app", "T key pressed", { currentShowTasks: showTasks(), newShowTasks: !showTasks() });
+      setShowTasks(!showTasks());
+      return;
+    }
+
+    // Handle Enter in command mode
+    if (commandMode() && key === "enter" && !e.ctrl && !e.meta) {
+      log("app", "Enter pressed in command mode, sending message");
+      sendSteeringMessage();
+      return;
+    }
+
+    // ESC key: exit overlays
+    if (key === "escape" && !e.ctrl && !e.meta) {
+      if (commandMode()) {
+        log("app", "Exiting command mode via ESC");
+        setCommandMode(false);
+        setCommandInput("");
+        return;
+      }
+      if (showTasks()) {
+        log("app", "Closing tasks panel via ESC");
+        setShowTasks(false);
+        return;
+      }
+    }
+
+    // Don't process other keys when in command mode
+    // EXCEPT for ESC (handled above) and Enter (handled above)
+    // This allows the input component to receive all other keyboard events
+    if (commandMode()) {
+      log("app", "In command mode, blocking key for input component", { key });
+      return;
+    }
+
+    // Dismiss error overlay on any key press
+    if (showError()) {
+      log("app", "Dismissing error overlay via key press", { key });
+      setShowError(false);
+      setErrorMessage(null);
+      return;
+    }
 
     // p key: toggle pause
     if (key === "p" && !e.ctrl && !e.meta) {
@@ -239,6 +423,8 @@ export function App(props: AppProps) {
     }
   });
 
+  log("app", "useKeyboard registered, about to return JSX");
+
   return (
     <box
       flexDirection="column"
@@ -252,6 +438,9 @@ export function App(props: AppProps) {
         tasksComplete={state().tasksComplete}
         totalTasks={state().totalTasks}
         eta={eta()}
+        tasks={tasks()}
+        showTasks={showTasks()}
+        onToggleTasks={() => setShowTasks(!showTasks())}
       />
       <Log events={state().events} isIdle={state().isIdle} />
       <Footer
@@ -260,8 +449,126 @@ export function App(props: AppProps) {
         paused={state().status === "paused"}
         linesAdded={state().linesAdded}
         linesRemoved={state().linesRemoved}
+        commandMode={commandMode()}
+        showTasks={showTasks()}
       />
+      <Show when={showError() && errorMessage()}>
+        <ErrorOverlay
+          error={errorMessage()!}
+          onDismiss={() => setShowError(false)}
+        />
+      </Show>
       <PausedOverlay visible={state().status === "paused"} />
+      <Show when={showTasks()}>
+        <TasksPanel
+          tasks={tasks()}
+          onClose={() => setShowTasks(false)}
+        />
+      </Show>
+      <Show when={commandMode()}>
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          backgroundColor="rgba(0, 0, 0, 0.9)"
+          flexDirection="column"
+          justifyContent="center"
+          alignItems="center"
+        >
+          <box
+            backgroundColor={colors.bgDark}
+            borderColor={colors.purple}
+            borderStyle="single"
+            padding={2}
+            paddingLeft={3}
+            paddingRight={3}
+            flexDirection="column"
+            width={70}
+            height={10}
+          >
+            <text style={{ fg: colors.purple }}>
+              Send steering message to agent:
+            </text>
+            <box height={1} />
+            <input
+              value={commandInput()}
+              placeholder="Type message and press Enter"
+              onInput={(e: any) => {
+                log("app", "Input changed", { value: e.value });
+                setCommandInput(e.value);
+              }}
+              onSubmit={() => {
+                log("app", "Input submitted via Enter");
+                sendSteeringMessage();
+              }}
+              focusedBackgroundColor={colors.bgHighlight}
+              focusedTextColor={colors.fg}
+              cursorColor={colors.purple}
+            />
+            <box height={1} />
+            <text style={{ fg: colors.fgMuted }}>
+              ESC: cancel | Enter: send | Ctrl+C: quit
+            </text>
+          </box>
+        </box>
+      </Show>
     </box>
   );
+}
+
+export function startApp(props: AppProps & { 
+  onStateSettersReady?: (setters: AppStateSetters) => void 
+}): StartAppResult {
+  try {
+    log("app", "startApp() called");
+    
+    let resolveExitPromise: (() => void) | null = null;
+
+    const exitPromise = new Promise<void>((resolve) => {
+      resolveExitPromise = resolve;
+    });
+
+    log("app", "About to render App component");
+    render(
+      () => <App
+        options={props.options}
+        persistedState={props.persistedState}
+        onQuit={() => {
+          log("app", "onQuit() callback triggered");
+          props.onQuit();
+          if (resolveExitPromise) {
+            resolveExitPromise();
+          }
+        }}
+        iterationTimesRef={props.iterationTimesRef}
+        onKeyboardEvent={props.onKeyboardEvent}
+        onSessionCreated={props.onSessionCreated}
+        onSessionEnded={props.onSessionEnded}
+        onSessionsList={props.onSessionsList}
+        onSwitchSession={props.onSwitchSession}
+        setSendMessageRef={props.setSendMessageRef}
+        onStateSettersReady={props.onStateSettersReady}
+      />,
+      {
+        targetFps: 30,
+        gatherStats: false,
+        exitOnCtrlC: false,
+        useKittyKeyboard: {},
+      }
+    );
+    log("app", "render() called successfully");
+
+    log("app", "startApp() returning result (stateSetters will be provided via callback)");
+    return {
+      exitPromise,
+      // Return a placeholder that will be filled in by the callback
+      // @ts-ignore - temporarily bypassing TypeScript
+      stateSetters: undefined,
+    };
+  } catch (error) {
+    log("app", "ERROR in startApp", { error: String(error), stack: error instanceof Error ? error.stack : null });
+    throw error;
+  }
 }

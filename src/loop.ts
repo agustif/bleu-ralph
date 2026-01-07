@@ -94,7 +94,21 @@ export type LoopCallbacks = {
   onComplete: () => void;
   onError: (error: string) => void;
   onIdleChanged: (isIdle: boolean) => void;
+  onSessionCreated?: (sessionId: string, sendMessage: (message: string) => Promise<void>) => void;
+  onSessionEnded?: () => void;
+  onSwitchSession?: (sessionId: string) => void;
+  onSessionsList?: (sessions: Array<{ id: string; created: string }>) => void;
 };
+
+/**
+ * Calculate exponential backoff with jitter to prevent tight loops on errors
+ */
+function calculateBackoffMs(attempt: number, maxMs: number = 300000): number {
+  const baseMs = 5000; // Start with 5 seconds
+  const exponential = Math.min(baseMs * Math.pow(2, attempt - 1), maxMs);
+  const jitter = Math.random() * 0.1 * exponential; // 10% jitter
+  return Math.floor(exponential + jitter);
+}
 
 export async function runLoop(
   options: LoopOptions,
@@ -105,6 +119,7 @@ export async function runLoop(
   log("loop", "runLoop started", { planFile: options.planFile, model: options.model });
   
   let server: { url: string; close(): void; attached: boolean } | null = null;
+  let errorCount = 0; // Track consecutive errors for exponential backoff
 
   function createTimeoutlessFetch() {
     return (req: any) => {
@@ -154,6 +169,13 @@ export async function runLoop(
         isPaused = false;
         log("loop", "Resuming");
         callbacks.onResume();
+      }
+
+      // Apply exponential backoff if we've had recent errors
+      if (errorCount > 0) {
+        const backoffMs = calculateBackoffMs(errorCount);
+        log("loop", "Error backoff", { errorCount, backoffMs });
+        await Bun.sleep(backoffMs);
       }
 
       // Iteration start (10.11)
