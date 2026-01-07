@@ -1,5 +1,5 @@
 /**
- * Tokyo Night color palette for the TUI
+ * Tokyo Night color palette for the TUI with cyan accents
  */
 export const colors = {
   bg: "#1a1b26",
@@ -13,8 +13,8 @@ export const colors = {
   red: "#f7768e",
   yellow: "#e0af68",
   blue: "#7aa2f7",
-  purple: "#bb9af7",
-  cyan: "#7dcfff",
+  purple: "#26C0E0", // Updated purple to cyan accent
+  cyan: "#26C0E0",   // Cyan accent color
   border: "#414868",
 };
 

@@ -217,6 +217,33 @@ export async function runLoop(
       const sessionId = sessionResult.data.id;
       log("loop", "Session created", { sessionId });
 
+      // Create sendMessage function for this session
+      const sendMessage = async (message: string) => {
+        log("loop", "Sending user message to session", { sessionId, message });
+        try {
+          await client.session.message({
+            path: { id: sessionId },
+            body: { parts: [{ type: "text", text: message }] },
+          });
+          callbacks.onEvent({
+            iteration,
+            type: "user-message",
+            icon: "→",
+            text: message,
+            timestamp: Date.now(),
+          });
+        } catch (e: any) {
+          log("loop", "Failed to send message", { error: String(e) });
+          callbacks.onError(`Failed to send message: ${String(e)}`);
+        }
+      };
+
+      // Notify TUI that session is ready for steering messages
+      if (callbacks.onSessionCreated) {
+        log("loop", "Calling onSessionCreated callback", { sessionId });
+        callbacks.onSessionCreated(sessionId, sendMessage);
+      }
+
       // Subscribe to events - the SSE connection is established when we start iterating
       log("loop", "Subscribing to events...");
       const events = await client.event.subscribe();

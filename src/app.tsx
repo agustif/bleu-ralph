@@ -196,8 +196,13 @@ export function App(props: AppProps) {
   };
   globalUpdateIterationTimes = (times: number[]) => setIterationTimes(times);
   globalOnSessionCreated = (sessionId: string, sendMessage: (message: string) => Promise<void>) => {
-    log("app", "Session created", { sessionId });
+    log("app", "Session created callback received", { 
+      sessionId,
+      hasSendMessage: !!sendMessage,
+      sendMessageType: typeof sendMessage
+    });
     setSendMessage(() => sendMessage);
+    log("app", "SendMessage function set");
   };
   globalOnSessionEnded = () => {
     log("app", "Session ended");
@@ -286,22 +291,45 @@ export function App(props: AppProps) {
   // Send steering message
   const sendSteeringMessage = async () => {
     const message = commandInput().trim();
+    log("app", "sendSteeringMessage called", { 
+      message,
+      messageLength: message.length,
+      isEmpty: !message,
+      hasSender: !!sendMessage(),
+      currentSender: sendMessage()?.toString()
+    });
+    
     if (!message) {
+      log("app", "Message is empty, closing command mode");
       setCommandMode(false);
       setCommandInput("");
       return;
     }
+    
     const sender = sendMessage();
+    log("app", "Sender check", { 
+      hasSender: !!sender,
+      senderType: typeof sender
+    });
+    
     if (sender) {
       try {
+        log("app", "About to call sender function", { message });
         await sender(message);
-        log("app", "Sent steering message", { message });
+        log("app", "Sent steering message successfully", { message });
       } catch (e) {
-        log("app", "Failed to send steering message", { error: String(e) });
+        log("app", "Failed to send steering message", { 
+          error: String(e),
+          errorType: typeof e,
+          stack: e instanceof Error ? e.stack : null
+        });
       }
     } else {
       log("app", "No active session to send message");
+      console.warn("Ralph: No active session to send steering message");
     }
+    
+    log("app", "Closing command mode");
     setCommandMode(false);
     setCommandInput("");
   };
@@ -496,11 +524,19 @@ export function App(props: AppProps) {
               value={commandInput()}
               placeholder="Type message and press Enter"
               onInput={(e: any) => {
-                log("app", "Input changed", { value: e.value });
+                log("app", "Input changed", { 
+                  value: e.value, 
+                  currentInput: commandInput(),
+                  eventTarget: e.target 
+                });
                 setCommandInput(e.value);
               }}
-              onSubmit={() => {
-                log("app", "Input submitted via Enter");
+              onSubmit={(e: any) => {
+                log("app", "Input submitted", { 
+                  event: e, 
+                  currentInput: commandInput(),
+                  target: e.target 
+                });
                 sendSteeringMessage();
               }}
               focusedBackgroundColor={colors.bgHighlight}
