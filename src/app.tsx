@@ -385,9 +385,60 @@ export function App(props: AppProps) {
       return;
     }
 
-    // t key: toggle tasks panel (works even in command mode to close it)
-    if (key === "t" && !e.ctrl && !e.meta) {
-      log("app", "T key pressed", { currentShowTasks: showTasks(), newShowTasks: !showTasks() });
+    // t key: toggle tasks panel (only works when NOT in command mode)
+    if (key === "t" && !e.ctrl && !e.meta && !commandMode()) {
+      log("app", "T key pressed", { currentShowTasks: showTasks(), newShowTasks: !showTasks(), inCommandMode: commandMode() });
+      setShowTasks(!showTasks());
+      return;
+    }
+
+    // ESC key: exit overlays
+    if (key === "escape" && !e.ctrl && !e.meta) {
+      if (commandMode()) {
+        log("app", "Exiting command mode via ESC");
+        setCommandMode(false);
+        setCommandInput("");
+        return;
+      }
+      if (showTasks()) {
+        log("app", "Closing tasks panel via ESC");
+        setShowTasks(false);
+        return;
+      }
+    }
+
+    // Handle Enter in command mode
+    if (commandMode() && key === "enter" && !e.ctrl && !e.meta) {
+      log("app", "Enter pressed in command mode, sending message");
+      sendSteeringMessage();
+      return;
+    }
+
+    // CRITICAL: When in command mode, let ALL other keys pass through to input component
+    // Don't process any other keyboard shortcuts when in command mode
+    if (commandMode()) {
+      log("app", "In command mode, letting input component handle key", { key });
+      return; // Allow all other keys to reach the input component
+    }
+
+    // s key: switch sessions (cycle through available sessions)
+    if (key === "s" && !e.ctrl && !e.meta && !commandMode()) {
+      const sessionsList = sessions();
+      if (sessionsList.length > 0) {
+        const currentIndex = sessionsList.findIndex((s) => s.id === (globalThis as any).ralphCurrentSessionId?.());
+        const nextIndex = (currentIndex + 1) % sessionsList.length;
+        const nextSession = sessionsList[nextIndex];
+        log("app", "Switching session", { currentIndex, nextIndex, nextId: nextSession.id });
+        globalOnSwitchSession?.(nextSession.id);
+      } else {
+        log("app", "No sessions to switch");
+      }
+      return;
+    }
+
+    // t key: toggle tasks panel (only works when NOT in command mode)
+    if (key === "t" && !e.ctrl && !e.meta && !commandMode()) {
+      log("app", "T key pressed", { currentShowTasks: showTasks(), newShowTasks: !showTasks(), inCommandMode: commandMode() });
       setShowTasks(!showTasks());
       return;
     }
